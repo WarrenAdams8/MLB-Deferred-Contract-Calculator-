@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calculator, RefreshCw, DollarSign, TrendingDown, Calendar, Info } from 'lucide-react';
+import { Calculator, RefreshCw, DollarSign, TrendingDown, Calendar, Info, AlertCircle } from 'lucide-react';
 import { 
   BarChart, 
   Bar, 
@@ -14,6 +14,29 @@ import {
 import { calculateContract, formatMoney, formatMillions, ContractData, CalculationResult } from './utils/calculations';
 import { InfoTooltip } from './components/InfoTooltip';
 
+const CustomLegend = (props: any) => {
+  const { payload } = props;
+  return (
+    <div className="flex flex-wrap justify-center items-center gap-6 mt-4 select-none">
+      {payload.map((entry: any, index: number) => (
+        <div key={`item-${index}`} className="flex items-center gap-2 text-sm text-slate-600 font-medium">
+          {entry.value === 'Contract Ends' ? (
+            <div className="flex items-center justify-center w-8 h-4">
+               <div className="w-full border-t-2 border-red-500 border-dashed" />
+            </div>
+          ) : (
+            <div 
+              className="w-3 h-3 rounded-[1px]" 
+              style={{ backgroundColor: entry.color }} 
+            />
+          )}
+          <span>{entry.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 const App: React.FC = () => {
   // Default to a "Shohei Ohtani" style structure for initial state
   const [formData, setFormData] = useState<ContractData>({
@@ -25,42 +48,81 @@ const App: React.FC = () => {
     interestRate: 4.43 // Approximate Federal Mid-Term Rate at time of Ohtani deal
   });
 
+  const [errors, setErrors] = useState<{[key: string]: string}>({});
   const [results, setResults] = useState<CalculationResult | null>(null);
 
   useEffect(() => {
-    const res = calculateContract(formData);
-    setResults(res);
-  }, [formData]);
+    // Only calculate if there are no blocking errors
+    if (Object.keys(errors).length === 0) {
+      const res = calculateContract(formData);
+      setResults(res);
+    }
+  }, [formData, errors]);
+
+  const validate = (name: string, value: number, currentData: ContractData) => {
+    const newErrors = { ...errors };
+    const dataToCheck = { ...currentData, [name]: value };
+
+    // Clean up previous error for this field
+    delete newErrors[name];
+
+    // Specific Validations
+    
+    // 1. Total Value vs Deferral Amount Check
+    if (name === 'totalValue' || name === 'deferralAmount') {
+      if (dataToCheck.deferralAmount > dataToCheck.totalValue) {
+        newErrors.deferralAmount = "Deferral cannot exceed Total Value";
+      } else {
+        delete newErrors.deferralAmount;
+      }
+    }
+
+    // 2. Years check (Must be > 0 to avoid division by zero)
+    if (name === 'years' && value < 1) {
+      newErrors.years = "Contract length must be at least 1 year";
+    } else {
+      delete newErrors.years;
+    }
+
+    // 3. Payout Duration check (Must be > 0)
+    if (name === 'payoutDuration' && value < 1) {
+      newErrors.payoutDuration = "Payout must take at least 1 year";
+    } else {
+      delete newErrors.payoutDuration;
+    }
+
+    setErrors(newErrors);
+  };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     
-    if (name === 'totalValue' || name === 'deferralAmount') {
-      // Remove commas to parse the number
-      const rawValue = value.replace(/,/g, '');
-      
-      // Allow empty input to act as 0
-      if (rawValue === '') {
-        setFormData(prev => ({ ...prev, [name]: 0 }));
-        return;
-      }
+    // Remove commas to parse the number
+    let rawValue = value.replace(/,/g, '');
+    
+    // Prevent negative signs
+    rawValue = rawValue.replace(/-/g, '');
 
-      // Only update if it's a valid number
-      if (!isNaN(Number(rawValue))) {
-        setFormData(prev => ({
-          ...prev,
-          [name]: parseFloat(rawValue)
-        }));
-      }
-    } else {
-      setFormData(prev => ({
-        ...prev,
-        [name]: parseFloat(value) || 0
-      }));
+    // Allow empty input to act as 0 (temporarily for UI) or handle partial edits
+    if (rawValue === '') {
+      const newData = { ...formData, [name]: 0 };
+      setFormData(newData);
+      validate(name, 0, formData);
+      return;
+    }
+
+    // Only update if it's a valid number
+    if (!isNaN(Number(rawValue))) {
+      const numValue = parseFloat(rawValue);
+      const newData = { ...formData, [name]: numValue };
+      
+      setFormData(newData);
+      validate(name, numValue, formData);
     }
   };
 
   const loadScenario = (scenario: 'ohtani' | 'scherzer' | 'standard') => {
+    setErrors({}); // Clear errors on load
     if (scenario === 'ohtani') {
       setFormData({
         totalValue: 700_000_000,
@@ -144,7 +206,7 @@ const App: React.FC = () => {
                       name="totalValue"
                       value={formData.totalValue.toLocaleString()}
                       onChange={handleInputChange}
-                      className="w-full pl-8 pr-3 py-2 border border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-mono text-lg font-medium bg-slate-700 text-white placeholder-slate-400"
+                      className={`w-full pl-8 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-mono text-lg font-medium bg-slate-700 text-white placeholder-slate-400 ${errors.totalValue ? 'border-red-500 focus:ring-red-500' : 'border-slate-600'}`}
                     />
                   </div>
                 </div>
@@ -157,10 +219,12 @@ const App: React.FC = () => {
                     <input 
                       type="number" 
                       name="years"
+                      min="1"
                       value={formData.years}
                       onChange={handleInputChange}
-                      className="w-full px-3 py-2 border border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-lg font-medium bg-slate-700 text-white placeholder-slate-400"
+                      className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-lg font-medium bg-slate-700 text-white placeholder-slate-400 ${errors.years ? 'border-red-500 focus:ring-red-500' : 'border-slate-600'}`}
                     />
+                    {errors.years && <p className="text-red-500 text-xs mt-1">{errors.years}</p>}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-600 mb-1 flex items-center">
@@ -170,6 +234,7 @@ const App: React.FC = () => {
                     <input 
                       type="number" 
                       name="interestRate"
+                      min="0"
                       step="0.01"
                       value={formData.interestRate}
                       onChange={handleInputChange}
@@ -192,12 +257,20 @@ const App: React.FC = () => {
                         name="deferralAmount"
                         value={formData.deferralAmount.toLocaleString()}
                         onChange={handleInputChange}
-                        className="w-full pl-8 pr-3 py-2 border border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-mono text-lg font-medium bg-slate-700 text-white placeholder-slate-400"
+                        className={`w-full pl-8 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-mono text-lg font-medium bg-slate-700 text-white placeholder-slate-400 ${errors.deferralAmount ? 'border-red-500 focus:ring-red-500' : 'border-slate-600'}`}
                       />
                     </div>
-                    <p className="text-xs text-slate-500 mt-1">
-                      {((formData.deferralAmount / formData.totalValue) * 100).toFixed(1)}% of total contract
-                    </p>
+                    {errors.deferralAmount ? (
+                       <p className="text-red-500 text-xs mt-1 flex items-center gap-1">
+                         <AlertCircle size={12} /> {errors.deferralAmount}
+                       </p>
+                    ) : (
+                      <p className="text-xs text-slate-500 mt-1">
+                        {formData.totalValue > 0 
+                          ? ((formData.deferralAmount / formData.totalValue) * 100).toFixed(1) 
+                          : 0}% of total contract
+                      </p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
@@ -209,6 +282,7 @@ const App: React.FC = () => {
                       <input 
                         type="number" 
                         name="deferralStartYear"
+                        min="0"
                         value={formData.deferralStartYear}
                         onChange={handleInputChange}
                         className="w-full px-3 py-2 border border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-lg font-medium bg-slate-700 text-white placeholder-slate-400"
@@ -221,10 +295,12 @@ const App: React.FC = () => {
                       <input 
                         type="number" 
                         name="payoutDuration"
+                        min="1"
                         value={formData.payoutDuration}
                         onChange={handleInputChange}
-                        className="w-full px-3 py-2 border border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-lg font-medium bg-slate-700 text-white placeholder-slate-400"
+                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-lg font-medium bg-slate-700 text-white placeholder-slate-400 ${errors.payoutDuration ? 'border-red-500 focus:ring-red-500' : 'border-slate-600'}`}
                       />
+                      {errors.payoutDuration && <p className="text-red-500 text-xs mt-1">{errors.payoutDuration}</p>}
                     </div>
                   </div>
                 </div>
@@ -293,7 +369,18 @@ const App: React.FC = () => {
                       margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="label" hide={results.yearlyBreakdown.length > 15} />
+                      <XAxis 
+                        dataKey="label" 
+                        tickFormatter={(val) => {
+                          // Compact labels: "Year 1" -> "1", "Deferred 1" -> "D1"
+                          if (val.startsWith('Year ')) return val.replace('Year ', '');
+                          if (val.startsWith('Deferred ')) return val.replace('Deferred ', 'D');
+                          return val;
+                        }}
+                        interval="preserveStartEnd" 
+                        minTickGap={5}
+                        tick={{fontSize: 11}}
+                      />
                       <YAxis 
                         tickFormatter={(value) => `$${value / 1000000}M`}
                       />
@@ -301,10 +388,31 @@ const App: React.FC = () => {
                         formatter={(value: number) => formatMoney(value)}
                         labelStyle={{ color: '#1e293b', fontWeight: 'bold' }}
                       />
-                      <Legend />
-                      <ReferenceLine x={`Year ${formData.years}`} stroke="red" strokeDasharray="3 3" label="Contract Ends" />
-                      <Bar dataKey="payoutReceived" name="Cash Received" fill="#94a3b8" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="cbtValue" name="CBT Hit (Tax)" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                      <Legend 
+                        content={CustomLegend}
+                        payload={[
+                          { value: 'Cash Received', type: 'rect', color: '#94a3b8' },
+                          { value: 'CBT Hit (Tax)', type: 'rect', color: '#3b82f6' },
+                          { value: 'Contract Ends', type: 'line', color: 'red' }
+                        ]}
+                      />
+                      <ReferenceLine x={`Year ${formData.years}`} stroke="red" strokeDasharray="3 3" />
+                      <Bar 
+                        dataKey="payoutReceived" 
+                        name="Cash Received" 
+                        fill="#94a3b8" 
+                        radius={[4, 4, 0, 0]}
+                        animationDuration={1200}
+                        animationEasing="ease-out"
+                      />
+                      <Bar 
+                        dataKey="cbtValue" 
+                        name="CBT Hit (Tax)" 
+                        fill="#3b82f6" 
+                        radius={[4, 4, 0, 0]} 
+                        animationDuration={1200}
+                        animationEasing="ease-out"
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                 )}

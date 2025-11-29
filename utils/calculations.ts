@@ -26,7 +26,7 @@ export interface YearlyData {
   label: string;
   cashPay: number;
   deferredEarned: number; // Nominal value earned this year but deferred
-  cbtValue: number; // The PV of the total earned (cash + deferred) for this year
+  cbtValue: number; // The AAV (Tax Hit) for this year
   payoutReceived: number; // Cash actually received this year (salary + deferred payouts)
 }
 
@@ -45,79 +45,57 @@ export const calculateContract = (data: ContractData): CalculationResult => {
   const yearlyDeferral = deferralAmount / years;
   const yearlyCashSalary = yearlySalaryTotal - yearlyDeferral;
 
-  let totalCBTValue = 0;
-  const yearlyBreakdown: YearlyData[] = [];
-
-  // The deferred money is usually paid out in equal installments over the payoutDuration
-  const totalDeferred = deferralAmount;
-  const yearlyDeferredPayout = totalDeferred / payoutDuration;
-
-  // We need to map out a timeline that covers the playing contract + the payout period
-  // We assume deferral payments start 'deferralStartYear' years AFTER the contract ends.
-  // Note: If deferralStartYear is 1, it means 1 year after the contract ends.
+  // 1. Calculate Total Present Value of Deferred Money
+  // We determine the PV of every deferred dollar and sum it up first.
+  // According to the CBA, we calculate the AAV by taking the Total PV / Years.
   
+  let totalDeferredPV = 0;
+  
+  // Each year of service (1..years) earns a 'yearlyDeferral' amount.
+  // That amount is typically paid out in equal installments over the payout period.
+  // We must discount those specific future installments back to the specific earning year.
+  
+  for (let earningYear = 1; earningYear <= years; earningYear++) {
+    // The amount earned in this specific year that is deferred.
+    // We assume this 'yearlyDeferral' is paid out evenly over the payoutDuration years.
+    const installmentPerPayoutYear = yearlyDeferral / payoutDuration;
+
+    for (let p = 0; p < payoutDuration; p++) {
+      const payoutYear = years + deferralStartYear + p;
+      const timeDiff = payoutYear - earningYear; // Discount period
+      
+      totalDeferredPV += calculatePresentValue(installmentPerPayoutYear, timeDiff, interestRate);
+    }
+  }
+
+  const totalCashValue = yearlyCashSalary * years; // Cash paid in year earned is not discounted for CBT purposes
+  const totalPresentValue = totalCashValue + totalDeferredPV;
+  
+  // The CBT Hit is the Average Annual Value of the Total PV
+  const cbtAAV = totalPresentValue / years;
+  const nominalAAV = totalValue / years;
+
+  // 2. Build Yearly Data
+  const yearlyBreakdown: YearlyData[] = [];
   const totalTimeline = Math.max(years, years + deferralStartYear + payoutDuration);
+  
+  // Total amount deferred divided by payout years = annual check during retirement
+  const yearlyDeferredPayoutCheck = deferralAmount / payoutDuration;
 
   for (let i = 1; i <= totalTimeline; i++) {
-    let cashPay = 0;
-    let deferredEarned = 0;
-    let cbtHit = 0;
     let payoutReceived = 0;
 
-    // 1. Determine what is EARNED in this year (Playing Phase)
-    if (i <= years) {
-      cashPay = yearlyCashSalary;
-      deferredEarned = yearlyDeferral;
-
-      // Calculate CBT Hit for this specific year
-      // CBT = Cash Paid + PV of Deferred Money Earned This Year
-      
-      // When is this specific year's deferred money paid?
-      // In standard structures (like Ohtani), the deferred money earned in Year X 
-      // is paid out in installments starting after the contract.
-      // For simplicity in this model, we treat the "pot" of deferred money as being filled equally each playing year,
-      // and emptying equally during the payout years. 
-      
-      // We need to discount each future installment back to THIS year (Year i).
-      // The payout period starts at year: years + deferralStartYear
-      
-      let presentValueOfDeferredStream = 0;
-      
-      // This specific year's deferred earnings (yearlyDeferral) are technically paid out 
-      // as a slice of the total payout stream. 
-      // To be precise: We attribute 1/Nth of every future check to this year's labor.
-      // N = contract length.
-      
-      for (let p = 0; p < payoutDuration; p++) {
-        const payoutYearIndex = years + deferralStartYear + p;
-        // The payment amount happening in the future
-        const paymentAmount = yearlyDeferredPayout; 
-        
-        // We only own 1/years of that future check
-        const portionAttributedToThisYear = paymentAmount / years;
-        
-        // Time difference: Payout Year - Current Playing Year
-        // Article XXIII says discount back to June 30 of the season earned.
-        // We will assume payments happen July 1 for simplicity (whole years).
-        const timeDiff = payoutYearIndex - i; 
-        
-        presentValueOfDeferredStream += calculatePresentValue(portionAttributedToThisYear, timeDiff, interestRate);
-      }
-
-      cbtHit = cashPay + presentValueOfDeferredStream;
-      totalCBTValue += cbtHit;
-    }
-
-    // 2. Determine what is RECEIVED in this year (Payout Phase)
+    // Cash Salary Received (During playing years)
     if (i <= years) {
       payoutReceived += yearlyCashSalary;
     }
     
-    const payoutStartIndex = years + deferralStartYear; // 1-based index
+    // Deferred Payouts Received (During retirement years)
+    const payoutStartIndex = years + deferralStartYear; 
     const payoutEndIndex = payoutStartIndex + payoutDuration - 1;
 
     if (i >= payoutStartIndex && i <= payoutEndIndex) {
-      payoutReceived += yearlyDeferredPayout;
+      payoutReceived += yearlyDeferredPayoutCheck;
     }
 
     yearlyBreakdown.push({
@@ -125,13 +103,11 @@ export const calculateContract = (data: ContractData): CalculationResult => {
       label: i <= years ? `Year ${i}` : `Deferred ${i - years}`,
       cashPay: i <= years ? yearlyCashSalary : 0,
       deferredEarned: i <= years ? yearlyDeferral : 0,
-      cbtValue: i <= years ? cbtHit : 0,
+      // CBT Hit is spread evenly (AAV) across guaranteed years
+      cbtValue: i <= years ? cbtAAV : 0,
       payoutReceived
     });
   }
-
-  const nominalAAV = totalValue / years;
-  const cbtAAV = totalCBTValue / years;
   
   // Effective discount percentage
   const effectiveDiscount = ((nominalAAV - cbtAAV) / nominalAAV) * 100;
@@ -139,7 +115,7 @@ export const calculateContract = (data: ContractData): CalculationResult => {
   return {
     nominalAAV,
     cbtAAV,
-    totalPresentValue: totalCBTValue, // Sum of PVs
+    totalPresentValue,
     yearlyBreakdown,
     effectiveDiscount
   };
