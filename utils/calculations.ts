@@ -28,6 +28,7 @@ export interface YearlyData {
   deferredEarned: number; // Nominal value earned this year but deferred
   cbtValue: number; // The AAV (Tax Hit) for this year
   payoutReceived: number; // Cash actually received this year (salary + deferred payouts)
+  cumulativeReceived: number; // Running total of cash received
 }
 
 export interface CalculationResult {
@@ -36,6 +37,7 @@ export interface CalculationResult {
   totalPresentValue: number;
   yearlyBreakdown: YearlyData[];
   effectiveDiscount: number;
+  escrowRequirement: number; // Amount needed to fund the deferred portion
 }
 
 export const calculateContract = (data: ContractData): CalculationResult => {
@@ -51,6 +53,11 @@ export const calculateContract = (data: ContractData): CalculationResult => {
   
   let totalDeferredPV = 0;
   
+  // For Escrow calculation (Article XVI), the discount rate is 5% annually.
+  // This is calculated separately from the CBT PV which uses the Federal Mid-Term Rate.
+  let totalEscrowPV = 0;
+  const ESCROW_DISCOUNT_RATE = 5.0;
+
   // Each year of service (1..years) earns a 'yearlyDeferral' amount.
   // That amount is typically paid out in equal installments over the payout period.
   // We must discount those specific future installments back to the specific earning year.
@@ -64,7 +71,14 @@ export const calculateContract = (data: ContractData): CalculationResult => {
       const payoutYear = years + deferralStartYear + p;
       const timeDiff = payoutYear - earningYear; // Discount period
       
+      // CBT PV calculation (using input interest rate)
       totalDeferredPV += calculatePresentValue(installmentPerPayoutYear, timeDiff, interestRate);
+      
+      // Escrow PV calculation (using fixed 5% rate per Article XVI)
+      // Note: The CBA says funding must happen by the "second July 1 following the championship season".
+      // This simplifies to roughly 2 years after the earning year for full funding.
+      // However, for simplicity in this calculator, we calculate the PV at the time earned to show the magnitude.
+      totalEscrowPV += calculatePresentValue(installmentPerPayoutYear, timeDiff, ESCROW_DISCOUNT_RATE);
     }
   }
 
@@ -82,6 +96,8 @@ export const calculateContract = (data: ContractData): CalculationResult => {
   // Total amount deferred divided by payout years = annual check during retirement
   const yearlyDeferredPayoutCheck = deferralAmount / payoutDuration;
 
+  let runningTotal = 0;
+
   for (let i = 1; i <= totalTimeline; i++) {
     let payoutReceived = 0;
 
@@ -98,6 +114,8 @@ export const calculateContract = (data: ContractData): CalculationResult => {
       payoutReceived += yearlyDeferredPayoutCheck;
     }
 
+    runningTotal += payoutReceived;
+
     yearlyBreakdown.push({
       year: i,
       label: i <= years ? `Year ${i}` : `Deferred ${i - years}`,
@@ -105,7 +123,8 @@ export const calculateContract = (data: ContractData): CalculationResult => {
       deferredEarned: i <= years ? yearlyDeferral : 0,
       // CBT Hit is spread evenly (AAV) across guaranteed years
       cbtValue: i <= years ? cbtAAV : 0,
-      payoutReceived
+      payoutReceived,
+      cumulativeReceived: runningTotal
     });
   }
   
@@ -117,7 +136,8 @@ export const calculateContract = (data: ContractData): CalculationResult => {
     cbtAAV,
     totalPresentValue,
     yearlyBreakdown,
-    effectiveDiscount
+    effectiveDiscount,
+    escrowRequirement: totalEscrowPV // This represents the total PV that needs to be funded over the life of the deal
   };
 };
 
